@@ -15,8 +15,26 @@ const PORT = 5000;
 const OLLAMA_MODEL = 'qwen3-vl:2b';
 const OLLAMA_HOST = 'http://localhost:11434';
 
-const NUTRITION_PROMPT = `Extract nutrition facts from this label. Return ONLY valid JSON, no explanations:
-{"brand":"kirkland","product":"milk","calories":150,"protein":8,"carbs":12,"fat":8,"saturatedFat":5,"sodium":125,"fiber":0,"sugars":12,"addedSugars":0}`;
+const NUTRITION_PROMPT = `Extract nutrition facts from this label. Return JSON with: brand, product, calories, protein, carbs, fat, saturatedFat, sodium, fiber, sugars, addedSugars. Use null for missing values.`;
+
+// JSON Schema for structured output
+const NUTRITION_SCHEMA = {
+  type: 'object',
+  properties: {
+    brand: { type: 'string', nullable: true },
+    product: { type: 'string', nullable: true },
+    calories: { type: 'number', nullable: true },
+    protein: { type: 'number', nullable: true },
+    carbs: { type: 'number', nullable: true },
+    fat: { type: 'number', nullable: true },
+    saturatedFat: { type: 'number', nullable: true },
+    sodium: { type: 'number', nullable: true },
+    fiber: { type: 'number', nullable: true },
+    sugars: { type: 'number', nullable: true },
+    addedSugars: { type: 'number', nullable: true },
+  },
+  required: [],
+};
 
 // Convert file to base64 and remove newlines
 function fileToBase64(filePath) {
@@ -41,7 +59,8 @@ function callOllama(imagePath) {
         }
       ],
       stream: false,
-      thinking: false
+      thinking: false,
+      format: NUTRITION_SCHEMA
     });
 
     const options = {
@@ -103,61 +122,33 @@ function callOllama(imagePath) {
   });
 }
 
-// Extract a number value by field name - handles any format
-function extractNumber(text, fieldName) {
-  const patterns = [
-    new RegExp(`"${fieldName}"\\s*:\\s*(\\d+\\.?\\d*)`, 'i'),
-    new RegExp(`${fieldName}\\s*[:=]\\s*(\\d+\\.?\\d*)`, 'i'),
-    new RegExp(`${fieldName}\\s+(\\d+\\.?\\d*)\\s*(?:g|mg|kcal)?`, 'i'),
-  ];
-  
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match) {
-      return parseFloat(match[1]);
-    }
-  }
-  return 0;
-}
-
-// Extract a text value by field name
-function extractText(text, fieldName) {
-  const patterns = [
-    new RegExp(`"${fieldName}"\\s*:\\s*"([^"]+)"`, 'i'),
-    new RegExp(`${fieldName}\\s*[:=]\\s*([^,\\n]+)`, 'i'),
-  ];
-  
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match) {
-      return match[1].trim();
-    }
-  }
-  return '';
-}
-
-// Parse the JSON response from Ollama using individual field extraction
+// Parse the JSON response from Ollama - should be valid JSON with schema
 function parseNutritionResponse(response) {
   console.log('Parsing response...');
   
-  const nutrition = {
-    brand: extractText(response, 'brand'),
-    product: extractText(response, 'product'),
-    calories: Math.round(extractNumber(response, 'calories') || 0),
-    protein: Math.round((extractNumber(response, 'protein') || 0) * 10) / 10,
-    carbs: Math.round((extractNumber(response, 'carbohydrates') || extractNumber(response, 'carbs') || 0) * 10) / 10,
-    fat: Math.round((extractNumber(response, 'fat') || 0) * 10) / 10,
-    saturatedFat: Math.round((extractNumber(response, 'saturated[-_ ]?fat') || 0) * 10) / 10,
-    sodium: Math.round((extractNumber(response, 'sodium') || 0) * 10) / 10,
-    fiber: Math.round((extractNumber(response, 'fiber') || extractNumber(response, 'fibre') || 0) * 10) / 10,
-    sugars: Math.round((extractNumber(response, 'sugars') || 0) * 10) / 10,
-    addedSugars: Math.round((extractNumber(response, 'added[-_ ]?sugars') || 0) * 10) / 10,
-  };
-  
-  // Log what was extracted for debugging
-  console.log('Extracted nutrition:', nutrition);
-  
-  return nutrition;
+  // Try to parse as direct JSON first (schema ensures valid format)
+  try {
+    const parsed = JSON.parse(response);
+    
+    // Ensure all required fields exist with defaults
+    return {
+      brand: parsed.brand || '',
+      product: parsed.product || '',
+      calories: Math.round(Number(parsed.calories) || 0),
+      protein: Math.round((Number(parsed.protein) || 0) * 10) / 10,
+      carbs: Math.round((Number(parsed.carbs) || 0) * 10) / 10,
+      fat: Math.round((Number(parsed.fat) || 0) * 10) / 10,
+      saturatedFat: Math.round((Number(parsed.saturatedFat) || 0) * 10) / 10,
+      sodium: Math.round((Number(parsed.sodium) || 0) * 10) / 10,
+      fiber: Math.round((Number(parsed.fiber) || 0) * 10) / 10,
+      sugars: Math.round((Number(parsed.sugars) || 0) * 10) / 10,
+      addedSugars: Math.round((Number(parsed.addedSugars) || 0) * 10) / 10,
+    };
+  } catch (error) {
+    console.error('JSON parse error:', error.message);
+    console.error('Raw response:', response.substring(0, 500));
+    throw new Error(`Failed to parse JSON: ${error.message}`);
+  }
 }
 
 // Health check
