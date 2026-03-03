@@ -33,19 +33,75 @@ function ItemCard({
       
       <p className="text-sm text-gray-500 mt-2">
         {item.servingsPerPackage} servings × {item.nutritionPerServing.calories} cal/serving
+        {item.userPortion && item.userPortion < 100 && (
+          <span className="ml-2 text-blue-600">(My portion: {item.userPortion}%)</span>
+        )}
       </p>
       
+      <div className="mt-3 grid grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Start Date</label>
+          <input
+            type="date"
+            value={item.dateOpened || ''}
+            onChange={(e) => onUpdate({ dateOpened: e.target.value })}
+            className="w-full border border-gray-300 rounded px-2 py-1 text-sm text-gray-900"
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Finish Date</label>
+          <input
+            type="date"
+            value={item.dateFinished || ''}
+            onChange={(e) => onUpdate({ dateFinished: e.target.value })}
+            className="w-full border border-gray-300 rounded px-2 py-1 text-sm text-gray-900"
+            disabled={item.isFinished}
+          />
+        </div>
+      </div>
+      
       {!item.dateOpened && !item.isFinished && (
-        <button
-          onClick={onStartConsuming}
-          className="mt-3 bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700"
-        >
-          Start Consuming
-        </button>
+        <div className="mt-3">
+          <div className="mb-3">
+            <div className="flex justify-between text-sm mb-1">
+              <span className="text-gray-600">My Portion</span>
+              <span className="font-medium">{item.userPortion || 100}%</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={item.userPortion || 100}
+              onChange={(e) => onUpdate({ userPortion: parseInt(e.target.value) })}
+              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+            />
+          </div>
+          <button
+            onClick={onStartConsuming}
+            className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-green-700"
+          >
+            Start Consuming
+          </button>
+        </div>
       )}
       
       {item.dateOpened && !item.isFinished && (
         <div className="mt-3">
+          <div className="mb-3">
+            <div className="flex justify-between text-sm mb-1">
+              <span className="text-gray-600">My Portion</span>
+              <span className="font-medium">{item.userPortion || 100}%</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={item.userPortion || 100}
+              onChange={(e) => onUpdate({ userPortion: parseInt(e.target.value) })}
+              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+            />
+          </div>
+          
           <div className="flex justify-between text-sm mb-1">
             <span className="text-gray-600">Consumed</span>
             <span className="font-medium">{item.consumedPercentage}%</span>

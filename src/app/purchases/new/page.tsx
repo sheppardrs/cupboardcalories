@@ -4,9 +4,10 @@ import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/auth-context';
 import { createPurchase } from '@/lib/db';
+import { getUserSettings } from '@/lib/settings';
 import { searchProducts, getProductByBarcode, convertToNutritionData } from '@/lib/openfoodfacts';
 import { processNutritionLabel, ExtractedNutrition } from '@/lib/ocr';
-import { PurchaseItem, NutritionData, OpenFoodFactsProduct } from '@/types';
+import { PurchaseItem, NutritionData, OpenFoodFactsProduct, UserSettings } from '@/types';
 
 const emptyNutrition: NutritionData = {
   calories: 0,
@@ -34,6 +35,9 @@ export default function NewPurchase() {
   const [saving, setSaving] = useState(false);
   const [ocrProcessing, setOcrProcessing] = useState(false);
   const [ocrDebug, setOcrDebug] = useState<{ text: string; nutrition: any } | null>(null);
+  const [pendingItems, setPendingItems] = useState<PurchaseItem[]>([]);
+  const [showReview, setShowReview] = useState(false);
+  const [settings, setSettings] = useState<UserSettings>({ defaultFinishDays: 14 });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -41,6 +45,12 @@ export default function NewPurchase() {
       router.push('/');
     }
   }, [user, loading, router]);
+
+  useEffect(() => {
+    if (user) {
+      getUserSettings(user.uid).then(setSettings);
+    }
+  }, [user]);
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
@@ -72,57 +82,89 @@ export default function NewPurchase() {
     }
   };
 
+  const createItemFromNutrition = (nutrition: ExtractedNutrition): PurchaseItem => {
+    const today = new Date();
+    const defaultFinish = new Date(today);
+    defaultFinish.setDate(today.getDate() + settings.defaultFinishDays);
+    
+    return {
+      id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+      name: nutrition.product || nutrition.brand || '',
+      brand: nutrition.brand || '',
+      nutritionPerServing: {
+        calories: nutrition.calories || 0,
+        protein: nutrition.protein || 0,
+        carbs: nutrition.carbs || 0,
+        fat: nutrition.fat || 0,
+        saturatedFat: nutrition.saturatedFat || 0,
+        cholesterol: 0,
+        sodium: nutrition.sodium || 0,
+        fiber: nutrition.fiber || 0,
+        sugars: nutrition.sugars || 0,
+        addedSugars: nutrition.addedSugars || 0,
+      },
+      servingsPerPackage: 1,
+      userPortion: 100,
+      consumedPercentage: 0,
+      dateOpened: today.toISOString().split('T')[0],
+      dateFinished: defaultFinish.toISOString().split('T')[0],
+      isFinished: false,
+      dataSource: 'ocr',
+    };
+  };
+
   const handleOCR = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
     
     setOcrProcessing(true);
     setOcrDebug(null);
+    
+    const newPendingItems: PurchaseItem[] = [];
+    
     try {
-      const { text, nutrition } = await processNutritionLabel(file);
-      setOcrDebug({ text, nutrition });
-      
-      const hasNutrientData = Object.entries(nutrition).some(([key, value]) => 
-        key !== 'brand' && key !== 'product' && value && Number(value) > 0
-      );
-      
-      if (!hasNutrientData) {
-        alert('Could not extract nutrition data from image. Please enter manually.');
-        return;
+      for (const file of Array.from(files)) {
+        const { text, nutrition } = await processNutritionLabel(file);
+        
+        const hasNutrientData = Object.entries(nutrition).some(([key, value]) => 
+          key !== 'brand' && key !== 'product' && value && Number(value) > 0
+        );
+        
+        if (hasNutrientData) {
+          const newItem = createItemFromNutrition(nutrition);
+          newPendingItems.push(newItem);
+        }
       }
       
-      const itemName = nutrition.product || nutrition.brand || '';
-      
-      const newItem: PurchaseItem = {
-        id: Date.now().toString(),
-        name: itemName,
-        brand: nutrition.brand || '',
-        nutritionPerServing: {
-          calories: nutrition.calories || 0,
-          protein: nutrition.protein || 0,
-          carbs: nutrition.carbs || 0,
-          fat: nutrition.fat || 0,
-          saturatedFat: nutrition.saturatedFat || 0,
-          cholesterol: 0,
-          sodium: nutrition.sodium || 0,
-          fiber: nutrition.fiber || 0,
-          sugars: nutrition.sugars || 0,
-          addedSugars: nutrition.addedSugars || 0,
-        },
-        servingsPerPackage: 1,
-        consumedPercentage: 0,
-        isFinished: false,
-        dataSource: 'ocr',
-      };
-      
-      setItems([...items, newItem]);
+      if (newPendingItems.length > 0) {
+        setPendingItems([...pendingItems, ...newPendingItems]);
+        setShowReview(true);
+      } else {
+        alert('Could not extract nutrition data from images. Please enter manually.');
+      }
     } catch (error) {
       console.error('OCR error:', error);
-      alert('Failed to process image. Please enter manually.');
+      alert('Failed to process images. Please enter manually.');
     } finally {
       setOcrProcessing(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
+  };
+
+  const handleReviewConfirm = () => {
+    setItems([...items, ...pendingItems]);
+    setPendingItems([]);
+    setShowReview(false);
+  };
+
+  const handleReviewUpdate = (index: number, updates: Partial<PurchaseItem>) => {
+    const updated = [...pendingItems];
+    updated[index] = { ...updated[index], ...updates };
+    setPendingItems(updated);
+  };
+
+  const handleReviewRemove = (index: number) => {
+    setPendingItems(pendingItems.filter((_, i) => i !== index));
   };
 
   const handleSelectProduct = (product: OpenFoodFactsProduct) => {
@@ -134,6 +176,10 @@ export default function NewPurchase() {
     if (!selectedProduct) return;
     
     const nutrition = convertToNutritionData(selectedProduct);
+    const today = new Date();
+    const defaultFinish = new Date(today);
+    defaultFinish.setDate(today.getDate() + settings.defaultFinishDays);
+    
     const newItem: PurchaseItem = {
       id: Date.now().toString(),
       name: selectedProduct.product_name || 'Unknown',
@@ -142,7 +188,10 @@ export default function NewPurchase() {
       nutritionPerServing: nutrition,
       servingsPerPackage: 1,
       servingSize: '100g',
+      userPortion: 100,
       consumedPercentage: 0,
+      dateOpened: today.toISOString().split('T')[0],
+      dateFinished: defaultFinish.toISOString().split('T')[0],
       isFinished: false,
       dataSource: 'api',
     };
@@ -154,12 +203,19 @@ export default function NewPurchase() {
   };
 
   const addManualItem = () => {
+    const today = new Date();
+    const defaultFinish = new Date(today);
+    defaultFinish.setDate(today.getDate() + settings.defaultFinishDays);
+    
     const newItem: PurchaseItem = {
       id: Date.now().toString(),
       name: '',
       nutritionPerServing: { ...emptyNutrition },
       servingsPerPackage: 1,
+      userPortion: 100,
       consumedPercentage: 0,
+      dateOpened: today.toISOString().split('T')[0],
+      dateFinished: defaultFinish.toISOString().split('T')[0],
       isFinished: false,
       dataSource: 'manual',
     };
@@ -309,6 +365,7 @@ export default function NewPurchase() {
               ref={fileInputRef}
               type="file"
               accept="image/*"
+              multiple
               onChange={handleOCR}
               className="hidden"
             />
@@ -317,7 +374,7 @@ export default function NewPurchase() {
               disabled={ocrProcessing}
               className="text-blue-600 hover:underline mr-4"
             >
-              {ocrProcessing ? 'Processing image...' : '+ Scan nutrition label'}
+              {ocrProcessing ? 'Processing images...' : '+ Scan nutrition labels (single or multiple)'}
             </button>
             <button
               onClick={addManualItem}
@@ -336,6 +393,184 @@ export default function NewPurchase() {
             </pre>
             <div className="text-sm text-yellow-800">
               <strong>Parsed values:</strong> {JSON.stringify(ocrDebug.nutrition)}
+            </div>
+          </section>
+        )}
+
+        {showReview && pendingItems.length > 0 && (
+          <section className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 mb-6">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-lg font-semibold text-yellow-900">Review Extracted Items ({pendingItems.length})</h2>
+              <button
+                onClick={() => setShowReview(false)}
+                className="text-yellow-700 hover:text-yellow-900 text-sm"
+              >
+                Cancel
+              </button>
+            </div>
+            
+            {pendingItems.map((item, index) => (
+              <div key={item.id} className="border border-yellow-300 rounded-lg p-4 mb-4 bg-white">
+                <div className="flex justify-between items-start mb-3">
+                  <span className="text-sm text-gray-500">Item {index + 1}</span>
+                  <button
+                    onClick={() => handleReviewRemove(index)}
+                    className="text-red-600 hover:text-red-700 text-sm"
+                  >
+                    Remove
+                  </button>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                  <input
+                    type="text"
+                    value={item.name}
+                    onChange={(e) => handleReviewUpdate(index, { name: e.target.value })}
+                    placeholder="Product name"
+                    className="border border-gray-300 rounded-lg px-3 py-2 text-gray-900"
+                  />
+                  <input
+                    type="text"
+                    value={item.brand || ''}
+                    onChange={(e) => handleReviewUpdate(index, { brand: e.target.value })}
+                    placeholder="Brand"
+                    className="border border-gray-300 rounded-lg px-3 py-2 text-gray-900"
+                  />
+                </div>
+                
+                <div className="grid grid-cols-3 md:grid-cols-6 gap-2 mb-3 text-sm">
+                  <div>
+                    <label className="text-xs text-gray-500">Calories</label>
+                    <input
+                      type="number"
+                      value={item.nutritionPerServing.calories}
+                      onChange={(e) => handleReviewUpdate(index, { 
+                        nutritionPerServing: { ...item.nutritionPerServing, calories: parseFloat(e.target.value) || 0 }
+                      })}
+                      className="w-full border border-gray-300 rounded px-2 py-1 text-gray-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">Protein</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={item.nutritionPerServing.protein}
+                      onChange={(e) => handleReviewUpdate(index, { 
+                        nutritionPerServing: { ...item.nutritionPerServing, protein: parseFloat(e.target.value) || 0 }
+                      })}
+                      className="w-full border border-gray-300 rounded px-2 py-1 text-gray-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">Carbs</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={item.nutritionPerServing.carbs}
+                      onChange={(e) => handleReviewUpdate(index, { 
+                        nutritionPerServing: { ...item.nutritionPerServing, carbs: parseFloat(e.target.value) || 0 }
+                      })}
+                      className="w-full border border-gray-300 rounded px-2 py-1 text-gray-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">Fat</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={item.nutritionPerServing.fat}
+                      onChange={(e) => handleReviewUpdate(index, { 
+                        nutritionPerServing: { ...item.nutritionPerServing, fat: parseFloat(e.target.value) || 0 }
+                      })}
+                      className="w-full border border-gray-300 rounded px-2 py-1 text-gray-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">Sat Fat</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={item.nutritionPerServing.saturatedFat}
+                      onChange={(e) => handleReviewUpdate(index, { 
+                        nutritionPerServing: { ...item.nutritionPerServing, saturatedFat: parseFloat(e.target.value) || 0 }
+                      })}
+                      className="w-full border border-gray-300 rounded px-2 py-1 text-gray-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">Sodium</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={item.nutritionPerServing.sodium}
+                      onChange={(e) => handleReviewUpdate(index, { 
+                        nutritionPerServing: { ...item.nutritionPerServing, sodium: parseFloat(e.target.value) || 0 }
+                      })}
+                      className="w-full border border-gray-300 rounded px-2 py-1 text-gray-900"
+                    />
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-3 mb-3">
+                  <div>
+                    <label className="block text-sm text-gray-700 mb-1">My Portion (%)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={item.userPortion}
+                      onChange={(e) => handleReviewUpdate(index, { userPortion: parseInt(e.target.value) || 0 })}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-gray-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-700 mb-1">Servings per package</label>
+                    <input
+                      type="number"
+                      value={item.servingsPerPackage}
+                      onChange={(e) => handleReviewUpdate(index, { servingsPerPackage: parseFloat(e.target.value) || 1 })}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-gray-900"
+                    />
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm text-gray-700 mb-1">Start Date</label>
+                    <input
+                      type="date"
+                      value={item.dateOpened || ''}
+                      onChange={(e) => handleReviewUpdate(index, { dateOpened: e.target.value })}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-gray-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-700 mb-1">Finish Date</label>
+                    <input
+                      type="date"
+                      value={item.dateFinished || ''}
+                      onChange={(e) => handleReviewUpdate(index, { dateFinished: e.target.value })}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-gray-900"
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+            
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowReview(false)}
+                className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700"
+              >
+                Keep Editing
+              </button>
+              <button
+                onClick={handleReviewConfirm}
+                className="px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700"
+              >
+                Add All Items
+              </button>
             </div>
           </section>
         )}
@@ -539,6 +774,44 @@ export default function NewPurchase() {
                   <span className="ml-2 text-sm text-gray-500">
                     (per serving: {item.nutritionPerServing.calories} cal)
                   </span>
+                </div>
+
+                <div className="mt-3 grid grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      My Portion (%)
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={item.userPortion || 100}
+                      onChange={(e) => updateItem(item.id, { userPortion: parseInt(e.target.value) || 100 })}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-gray-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Start Date
+                    </label>
+                    <input
+                      type="date"
+                      value={item.dateOpened || ''}
+                      onChange={(e) => updateItem(item.id, { dateOpened: e.target.value })}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-gray-900"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Finish Date
+                    </label>
+                    <input
+                      type="date"
+                      value={item.dateFinished || ''}
+                      onChange={(e) => updateItem(item.id, { dateFinished: e.target.value })}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-gray-900"
+                    />
+                  </div>
                 </div>
               </div>
             ))}

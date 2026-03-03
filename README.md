@@ -1,37 +1,168 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# NutriTrack
 
-## Getting Started
+A longitudinal nutrition tracking app that tracks nutrition at the package level. Unlike traditional meal logging, NutriTrack lets you input full packages at purchase and distributes the nutrition across the consumption window until the item is finished or repurchased.
 
-First, run the development server:
+## Features
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- **Google Authentication** - Secure sign-in with Firebase
+- **Multiple Input Methods**
+  - Manual entry with OpenFoodFacts API lookup
+  - Barcode scanning via OpenFoodFacts
+  - OCR from nutrition label images (local Ollama VLM)
+- **Batch Image Upload** - Upload multiple images, review all extractions before saving
+- **Portion Tracking** - Set what percentage of each package you plan to consume
+- **Consumption Dates** - Track when you start and finish items
+- **Weekly Averages** - View daily nutrition averages for the current week
+- **Interactive Charts** - Toggle which nutrients to display (calories, carbs, protein, fat, saturatedFat)
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|------------|
+| Framework | Next.js 16 (App Router) |
+| Language | TypeScript |
+| Styling | Tailwind CSS |
+| Auth | Firebase Auth (Google Sign-In) |
+| Database | Firebase Firestore |
+| OCR | Ollama + qwen3-vl:2b model |
+| Nutrition Data | OpenFoodFacts API |
+| Validation | Zod |
+| Charts | Recharts |
+
+## Prerequisites
+
+- Node.js 18+
+- [Ollama](https://ollama.com) installed locally
+- Firebase project with Auth and Firestore enabled
+
+## Environment Variables
+
+Create a `.env.local` file in the project root:
+
+```env
+NEXT_PUBLIC_FIREBASE_API_KEY=your_api_key
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=your_project.firebaseapp.com
+NEXT_PUBLIC_FIREBASE_PROJECT_ID=your_project_id
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=your_project.appspot.com
+NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=your_sender_id
+NEXT_PUBLIC_FIREBASE_APP_ID=your_app_id
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## How to Run
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+You need three terminal windows (or tabs):
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### Terminal 1: Start Ollama
+```bash
+ollama serve
+```
 
-## Learn More
+### Terminal 2: Start VLM Server
+```bash
+cd server
+node vlm-server.js
+```
 
-To learn more about Next.js, take a look at the following resources:
+### Terminal 3: Start Next.js
+```bash
+npm run dev
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Then open http://localhost:3000 in your browser.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Data Model
 
-## Deploy on Vercel
+### PurchaseItem
+```typescript
+interface PurchaseItem {
+  id: string;
+  name: string;
+  brand?: string;
+  barcode?: string;
+  nutritionPerServing: NutritionData;
+  servingsPerPackage: number;
+  servingSize?: string;
+  userPortion: number;        // % of package user will consume (0-100)
+  consumedPercentage: number; // % of user's portion consumed (0-100)
+  dateOpened?: string;
+  dateFinished?: string;
+  isFinished: boolean;
+  dataSource: 'api' | 'manual' | 'ocr';
+  purchaseId?: string;
+  purchaseDate?: string;
+}
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### NutritionData
+```typescript
+interface NutritionData {
+  calories: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  saturatedFat: number;
+  unsaturatedFat?: number;
+  cholesterol: number;
+  sodium: number;
+  fiber: number;
+  sugars: number;
+  addedSugars: number;
+}
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
-simple longitudinal calorie tracking app where you input full packages at purchase, mark completion, and nutrition info is averaged over the consumption window
+### UserSettings
+```typescript
+interface UserSettings {
+  defaultFinishDays: number; // default: 14
+}
+```
+
+## Project Structure
+
+```
+/home/bobby/Documents/nutritionapp/
+├── src/
+│   ├── app/
+│   │   ├── dashboard/
+│   │   │   └── page.tsx       # Weekly averages, charts, active items
+│   │   ├── purchases/
+│   │   │   ├── page.tsx       # List purchases, editable dates/portions
+│   │   │   └── new/
+│   │   │       └── page.tsx   # Add purchase, batch upload, review
+│   │   ├── reports/
+│   │   │   └── page.tsx       # Weekly/monthly reports
+│   │   ├── layout.tsx         # Root layout with AuthProvider
+│   │   └── page.tsx           # Login page
+│   ├── lib/
+│   │   ├── db.ts              # Firestore CRUD, nutrition calculations
+│   │   ├── firebase.ts        # Firebase config
+│   │   ├── settings.ts        # User settings CRUD
+│   │   ├── ocr.ts             # OCR client (calls VLM server)
+│   │   ├── openfoodfacts.ts   # Product search API
+│   │   └── nutrition-schema.ts # Zod validation schema
+│   ├── contexts/
+│   │   └── auth-context.tsx  # Firebase auth context
+│   └── types/
+│       └── index.ts           # TypeScript interfaces
+├── server/
+│   └── vlm-server.js          # Express server for Ollama VLM
+├── uploads/                   # Temp directory for image uploads
+├── SPEC.md                    # Full specification document
+└── package.json
+```
+
+## Nutrition Distribution Formula
+
+When you consume a portion of a package, the nutrition is distributed evenly across the days you've:
+
+```
+totalNutrients = nutritionPerServing × servingsPerPackage × (userPortion / 100) × (consumedPercentage / 100)
+daysActive = dateFinished - dateOpened (or today if not finished)
+dailyAmount = totalNutrients / max(daysActive, 1)
+```
+
+This means if you eat half a package over 10 days, you'll get 1/20th of the nutrition each day rather than logging it all at once.
+
+## License
+
+MIT

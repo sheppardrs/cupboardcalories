@@ -20,7 +20,8 @@ export interface PurchaseItem {
   nutritionPerServing: NutritionData;
   servingsPerPackage: number;
   servingSize?: string;
-  consumedPercentage: number;
+  userPortion: number; // percentage of package user will consume (0-100)
+  consumedPercentage: number; // how much of user's portion has been consumed (0-100)
   dateOpened?: string;
   dateFinished?: string;
   isFinished: boolean;
@@ -42,6 +43,10 @@ export interface DailyNutrition {
   date: string;
   userId: string;
   totals: NutritionData;
+}
+
+export interface UserSettings {
+  defaultFinishDays: number; // default: 14
 }
 
 export interface OpenFoodFactsProduct {

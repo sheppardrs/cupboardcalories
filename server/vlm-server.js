@@ -60,7 +60,8 @@ function callOllama(imagePath) {
       ],
       stream: false,
       thinking: false,
-      format: NUTRITION_SCHEMA
+      format: NUTRITION_SCHEMA,
+      temperature: 0.1  // Low temperature for more consistent OCR results
     });
 
     const options = {

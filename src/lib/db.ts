@@ -125,8 +125,10 @@ export function calculateDailyNutrition(
     
     if (dateOpened < opened || dateOpened > finished) continue;
     
+    const userPortion = (item.userPortion || 100) / 100;
+    const consumedPortion = item.consumedPercentage / 100;
     const daysActive = Math.max(1, Math.ceil((finished.getTime() - opened.getTime()) / (1000 * 60 * 60 * 24)));
-    const dailyPortion = item.consumedPercentage / 100 / daysActive;
+    const dailyPortion = (userPortion * consumedPortion) / daysActive;
     
     totals.calories += item.nutritionPerServing.calories * item.servingsPerPackage * dailyPortion;
     totals.protein += item.nutritionPerServing.protein * item.servingsPerPackage * dailyPortion;
